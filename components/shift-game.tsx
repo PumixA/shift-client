@@ -1,275 +1,278 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
-import { Book } from "lucide-react"
+import { useState, useCallback, useRef, useEffect } from "react"
+import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio } from "lucide-react"
+import { socket } from "@/services/socket"
+import { toast, Toaster } from "sonner" // ✅ Import du Toaster ajouté
+
+// Components
 import { TopBar } from "./game/top-bar"
 import { GameViewport, type GameViewportRef } from "./game/game-viewport"
 import { RuleBook } from "./game/rule-book"
 import { RuleBuilderModal, type BuiltRule } from "./game/rule-builder-modal"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 
-export interface Tile {
-  id: string
-  x: number
-  y: number
-  type: "normal" | "special" | "start" | "end"
-}
+// --- Interfaces ---
+export interface Tile { id: string; x: number; y: number; type: "normal" | "special" | "start" | "end" }
+export interface Player { id: number; name: string; avatar: string; score: number; color: "cyan" | "violet"; position: { x: number; y: number } }
 
-export interface Player {
-  id: number
-  name: string
-  avatar: string
-  score: number
-  color: "cyan" | "violet"
-  position: { x: number; y: number }
-}
-
+// --- Initial Data ---
 const initialTiles: Tile[] = Array.from({ length: 20 }, (_, i) => ({
-  id: `tile-${i}`,
-  x: i - 10,
-  y: 0,
-  type: i === 0 ? "start" : i === 19 ? "end" : i % 5 === 0 ? "special" : "normal",
+    id: `tile-${i}`, x: i - 10, y: 0, type: i === 0 ? "start" : i === 19 ? "end" : i % 5 === 0 ? "special" : "normal",
 }))
 
 const initialPlayers: Player[] = [
-  { id: 1, name: "Player 1", avatar: "/cyberpunk-avatar-1.png", score: 0, color: "cyan", position: { x: -10, y: 0 } },
-  {
-    id: 2,
-    name: "Player 2",
-    avatar: "/cyberpunk-avatar-2.png",
-    score: 150,
-    color: "violet",
-    position: { x: -10, y: 0 },
-  },
+    { id: 1, name: "Player 1", avatar: "/cyberpunk-avatar-1.png", score: 0, color: "cyan", position: { x: -10, y: 0 } },
+    { id: 2, name: "Player 2", avatar: "/cyberpunk-avatar-2.png", score: 150, color: "violet", position: { x: -10, y: 0 } },
 ]
 
 const initialRules: BuiltRule[] = [
-  {
-    id: "1",
-    title: "Movement",
-    trigger: { type: "roll_dice", value: "" },
-    conditions: [],
-    actions: [{ type: "move_forward", value: "dice" }],
-  },
-  {
-    id: "2",
-    title: "SHIFT Action",
-    trigger: { type: "land_on_tile", value: "special" },
-    conditions: [],
-    actions: [{ type: "add_tile", value: "1" }],
-  },
-  {
-    id: "3",
-    title: "Cyan Bonus",
-    trigger: { type: "land_on_tile", value: "special" },
-    conditions: [{ type: "tile_type", operator: "equals", value: "cyan" }],
-    actions: [{ type: "add_score", value: "50" }],
-  },
-  {
-    id: "4",
-    title: "Violet Bonus",
-    trigger: { type: "land_on_tile", value: "special" },
-    conditions: [{ type: "tile_type", operator: "equals", value: "violet" }],
-    actions: [{ type: "add_score", value: "100" }],
-  },
-  {
-    id: "5",
-    title: "Victory Condition",
-    trigger: { type: "turn_end", value: "" },
-    conditions: [{ type: "player_score", operator: "greater_than", value: "500" }],
-    actions: [{ type: "extra_turn", value: "" }],
-  },
-  {
-    id: "6",
-    title: "End Tile Win",
-    trigger: { type: "land_on_tile", value: "end" },
-    conditions: [],
-    actions: [{ type: "add_score", value: "500" }],
-  },
+    { id: "1", title: "Movement", trigger: { type: "roll_dice", value: "" }, conditions: [], actions: [{ type: "move_forward", value: "dice" }] },
 ]
 
 export default function ShiftGame() {
-  const [tiles, setTiles] = useState<Tile[]>(initialTiles)
-  const [players, setPlayers] = useState<Player[]>(initialPlayers)
-  const [currentTurn, setCurrentTurn] = useState(1)
-  const [diceValue, setDiceValue] = useState<number | null>(null)
-  const [isRolling, setIsRolling] = useState(false)
-  const [rules, setRules] = useState<BuiltRule[]>(initialRules)
-  const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false)
-  const [editingRule, setEditingRule] = useState<BuiltRule | null>(null)
-  const [mobileRuleBookOpen, setMobileRuleBookOpen] = useState(false)
-  const viewportRef = useRef<GameViewportRef>(null)
+    // --- Game State ---
+    const [tiles, setTiles] = useState<Tile[]>(initialTiles)
+    const [players, setPlayers] = useState<Player[]>(initialPlayers)
+    const [currentTurn, setCurrentTurn] = useState(1)
+    const [diceValue, setDiceValue] = useState<number | null>(null)
+    const [isRolling, setIsRolling] = useState(false)
+    const [rules, setRules] = useState<BuiltRule[]>(initialRules)
 
-  const rollDice = useCallback(() => {
-    if (isRolling) return
-    setIsRolling(true)
+    // --- Socket & Room State ---
+    const [isConnected, setIsConnected] = useState(socket.connected)
+    const [roomInput, setRoomInput] = useState("")
+    const [activeRoom, setActiveRoom] = useState<string | null>(null)
 
-    let rolls = 0
-    const interval = setInterval(() => {
-      setDiceValue(Math.floor(Math.random() * 6) + 1)
-      rolls++
-      if (rolls >= 10) {
-        clearInterval(interval)
-        const finalValue = Math.floor(Math.random() * 6) + 1
-        setDiceValue(finalValue)
-        setIsRolling(false)
+    // --- UI State ---
+    const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false)
+    const [editingRule, setEditingRule] = useState<BuiltRule | null>(null)
+    const [mobileRuleBookOpen, setMobileRuleBookOpen] = useState(false)
+    const viewportRef = useRef<GameViewportRef>(null)
 
-        setPlayers((prev) => prev.map((p) => (p.id === currentTurn ? { ...p, score: p.score + finalValue * 10 } : p)))
-        setCurrentTurn((prev) => (prev === 1 ? 2 : 1))
-      }
-    }, 100)
-  }, [isRolling, currentTurn])
+    // --- Socket Logic avec Logs de Debugging ---
+    useEffect(() => {
+        socket.connect()
 
-  const addTile = useCallback((direction: "up" | "down" | "left" | "right") => {
-    setTiles((prev) => {
-      const bounds = prev.reduce(
-        (acc, tile) => ({
-          minX: Math.min(acc.minX, tile.x),
-          maxX: Math.max(acc.maxX, tile.x),
-          minY: Math.min(acc.minY, tile.y),
-          maxY: Math.max(acc.maxY, tile.y),
-        }),
-        {
-          minX: Number.POSITIVE_INFINITY,
-          maxX: Number.NEGATIVE_INFINITY,
-          minY: Number.POSITIVE_INFINITY,
-          maxY: Number.NEGATIVE_INFINITY,
-        },
-      )
+        function onConnect() {
+            console.log("✅ Connecté au serveur Socket.io"); // Debug console
+            setIsConnected(true)
+            toast.success("Connecté au serveur SHIFT")
+        }
 
-      let newX: number, newY: number
-      switch (direction) {
-        case "up":
-          newX = Math.floor((bounds.minX + bounds.maxX) / 2)
-          newY = bounds.minY - 1
-          break
-        case "down":
-          newX = Math.floor((bounds.minX + bounds.maxX) / 2)
-          newY = bounds.maxY + 1
-          break
-        case "left":
-          newX = bounds.minX - 1
-          newY = 0
-          break
-        case "right":
-          newX = bounds.maxX + 1
-          newY = 0
-          break
-      }
+        function onDisconnect() {
+            console.log("❌ Déconnecté du serveur");
+            setIsConnected(false)
+            setActiveRoom(null)
+            toast.error("Déconnecté du serveur")
+        }
 
-      const newTile: Tile = {
-        id: `tile-${Date.now()}`,
-        x: newX,
-        y: newY,
-        type: Math.random() > 0.7 ? "special" : "normal",
-      }
+        function onRoomJoined(roomId: string) {
+            console.log("🏠 Confirmation de salle rejointe :", roomId);
+            setActiveRoom(roomId)
+            toast.info(`Salle rejointe : ${roomId}`)
+        }
 
-      return [...prev, newTile]
-    })
-  }, [])
+        function onPlayerJoined(data: { id: string, message: string }) {
+            console.log("👥 Un joueur a rejoint :", data.id);
+            toast(data.message, {
+                description: `ID: ${data.id.substring(0, 6)}...`,
+                icon: <Users className="h-4 w-4 text-cyan-500" />,
+            })
+        }
 
-  const centerOnPlayer = useCallback(() => {
-    const currentPlayer = players.find((p) => p.id === currentTurn)
-    if (currentPlayer && viewportRef.current) {
-      viewportRef.current.centerOnTile(currentPlayer.position.x, currentPlayer.position.y)
+        function onPongResponse(data: { message: string, serverTime: string }) {
+            console.log("🏓 Pong reçu du serveur :", data);
+            toast.success(data.message, {
+                description: `Réponse reçue à ${data.serverTime}`,
+                icon: <Radio className="h-4 w-4" />
+            })
+        }
+
+        function onIncomingShout(data: { senderId: string, message: string }) {
+            console.log("📣 Shout reçu :", data.message);
+            if (data.senderId !== socket.id) {
+                toast(`Message de la salle`, {
+                    description: `${data.senderId.substring(0, 4)} dit : ${data.message}`,
+                    icon: <Bell className="h-4 w-4 text-yellow-500" />,
+                })
+            }
+        }
+
+        socket.on("connect", onConnect)
+        socket.on("disconnect", onDisconnect)
+        socket.on("room_joined", onRoomJoined)
+        socket.on("player_joined_room", onPlayerJoined)
+        socket.on("pong_response", onPongResponse)
+        socket.on("incoming_shout", onIncomingShout)
+
+        return () => {
+            socket.off("connect", onConnect)
+            socket.off("disconnect", onDisconnect)
+            socket.off("room_joined", onRoomJoined)
+            socket.off("player_joined_room", onPlayerJoined)
+            socket.off("pong_response", onPongResponse)
+            socket.off("incoming_shout", onIncomingShout)
+            socket.disconnect()
+        }
+    }, [])
+
+    // --- Handlers ---
+    const handleJoinRoom = () => {
+        if (roomInput.trim()) {
+            console.log("📤 Émission join_room :", roomInput.trim());
+            socket.emit("join_room", roomInput.trim())
+        }
     }
-  }, [players, currentTurn])
 
-  const handleSaveRule = useCallback((rule: BuiltRule) => {
-    setRules((prev) => {
-      const existingIndex = prev.findIndex((r) => r.id === rule.id)
-      if (existingIndex >= 0) {
-        const updated = [...prev]
-        updated[existingIndex] = rule
-        return updated
-      }
-      return [...prev, rule]
-    })
-    setEditingRule(null)
-  }, [])
+    const triggerPing = () => {
+        console.log("📤 Émission ping_test");
+        socket.emit("ping_test")
+    }
 
-  const handleEditRule = useCallback((rule: BuiltRule) => {
-    setEditingRule(rule)
-    setRuleBuilderOpen(true)
-  }, [])
+    const triggerShout = () => {
+        if (activeRoom) {
+            console.log("📤 Émission send_shout dans :", activeRoom);
+            socket.emit("send_shout", { roomId: activeRoom, message: "Alerte SHIFT !" })
+            toast.info("Votre message a été diffusé à la salle.")
+        }
+    }
 
-  const handleDeleteRule = useCallback((id: string) => {
-    setRules((prev) => prev.filter((r) => r.id !== id))
-  }, [])
+    // ... (Handlers rollDice, addTile, centerOnPlayer, handleSaveRule inchangés)
+    const rollDice = useCallback(() => {
+        if (isRolling) return
+        setIsRolling(true)
+        let rolls = 0
+        const interval = setInterval(() => {
+            setDiceValue(Math.floor(Math.random() * 6) + 1)
+            rolls++
+            if (rolls >= 10) {
+                clearInterval(interval)
+                const finalValue = Math.floor(Math.random() * 6) + 1
+                setDiceValue(finalValue)
+                setIsRolling(false)
+                setPlayers((prev) => prev.map((p) => (p.id === currentTurn ? { ...p, score: p.score + finalValue * 10 } : p)))
+                setCurrentTurn((prev) => (prev === 1 ? 2 : 1))
+            }
+        }, 100)
+    }, [isRolling, currentTurn])
 
-  const handleAddRule = useCallback(() => {
-    setEditingRule(null)
-    setRuleBuilderOpen(true)
-  }, [])
+    const addTile = useCallback((direction: "up" | "down" | "left" | "right") => {
+        setTiles((prev) => {
+            const bounds = prev.reduce((acc, tile) => ({
+                minX: Math.min(acc.minX, tile.x),
+                maxX: Math.max(acc.maxX, tile.x),
+                minY: Math.min(acc.minY, tile.y),
+                maxY: Math.max(acc.maxY, tile.y),
+            }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity })
 
-  return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-background">
-      <TopBar
-        currentTurn={currentTurn}
-        players={players}
-        diceValue={diceValue}
-        isRolling={isRolling}
-        onRollDice={rollDice}
-      />
+            let newX = 0, newY = 0
+            if (direction === "up") { newX = Math.floor((bounds.minX + bounds.maxX) / 2); newY = bounds.minY - 1 }
+            else if (direction === "down") { newX = Math.floor((bounds.minX + bounds.maxX) / 2); newY = bounds.maxY + 1 }
+            else if (direction === "left") { newX = bounds.minX - 1; newY = 0 }
+            else { newX = bounds.maxX + 1; newY = 0 }
 
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        <div className="flex-1 min-w-0 relative">
-          <GameViewport
-            ref={viewportRef}
-            tiles={tiles}
-            players={players}
-            currentTurn={currentTurn}
-            onAddTile={addTile}
-            onCenterCamera={centerOnPlayer}
-          />
+            return [...prev, { id: `tile-${Date.now()}`, x: newX, y: newY, type: Math.random() > 0.7 ? "special" : "normal" }]
+        })
+    }, [])
+
+    const centerOnPlayer = useCallback(() => {
+        const currentPlayer = players.find((p) => p.id === currentTurn)
+        if (currentPlayer && viewportRef.current) {
+            viewportRef.current.centerOnTile(currentPlayer.position.x, currentPlayer.position.y)
+        }
+    }, [players, currentTurn])
+
+    const handleSaveRule = (rule: BuiltRule) => {
+        setRules((prev) => {
+            const existingIndex = prev.findIndex((r) => r.id === rule.id)
+            if (existingIndex >= 0) {
+                const updated = [...prev]; updated[existingIndex] = rule; return updated
+            }
+            return [...prev, rule]
+        })
+        setEditingRule(null)
+    }
+
+    return (
+        <div className="h-screen w-screen flex flex-col overflow-hidden bg-background text-foreground">
+            {/* ✅ Ajout du Toaster pour rendre les notifications visibles */}
+            <Toaster position="bottom-right" theme="dark" richColors />
+
+            <header className="relative z-50 bg-background/95 backdrop-blur border-b border-border/50 px-4 py-2 flex items-center justify-between shadow-2xl shadow-cyan-500/5">
+                <div className="flex items-center gap-6">
+                    <div className="flex flex-col">
+                        <span className="text-[10px] font-black tracking-[0.2em] text-muted-foreground uppercase leading-none mb-1">Infrastructure</span>
+                        <div className="flex items-center gap-3">
+                            <h1 className="text-2xl font-black tracking-tighter italic bg-gradient-to-r from-white to-muted-foreground bg-clip-text text-transparent text-white">SHIFT</h1>
+                            <Badge variant={isConnected ? "outline" : "destructive"} className={`h-5 gap-1.5 px-2 transition-all duration-500 ${isConnected ? 'text-cyan-400 border-cyan-500/30 bg-cyan-500/5' : ''}`}>
+                                {isConnected ? <Wifi className="h-3 w-3 animate-pulse" /> : <WifiOff className="h-3 w-3" />}
+                                <span className="text-[10px] uppercase font-black tracking-tight">
+                                    {isConnected ? (activeRoom ? `Room: ${activeRoom}` : "Online") : "Offline"}
+                                </span>
+                            </Badge>
+                        </div>
+                    </div>
+
+                    {!activeRoom && isConnected && (
+                        <div className="hidden md:flex items-center gap-2 ml-4 bg-muted/20 p-1.5 rounded-xl border border-border/40 backdrop-blur-xl">
+                            <Hash className="h-4 w-4 text-muted-foreground ml-2" />
+                            <Input
+                                placeholder="Code de salle..."
+                                value={roomInput}
+                                onChange={(e) => setRoomInput(e.target.value)}
+                                className="h-8 w-40 bg-transparent border-none focus-visible:ring-0 text-xs font-medium placeholder:text-muted-foreground/50 text-white"
+                                onKeyDown={(e) => e.key === "Enter" && handleJoinRoom()}
+                            />
+                            <Button size="sm" onClick={handleJoinRoom} className="h-8 px-4 bg-cyan-600 hover:bg-cyan-500 text-[10px] uppercase font-black tracking-widest transition-all hover:shadow-[0_0_15px_rgba(8,145,178,0.4)]">
+                                <LogIn className="h-3 w-3 mr-2" /> Rejoindre
+                            </Button>
+                        </div>
+                    )}
+
+                    {activeRoom && (
+                        <div className="hidden lg:flex items-center gap-2 ml-4 border-l border-border/50 pl-6">
+                            <Button variant="outline" size="sm" onClick={triggerPing} className="h-8 border-border/40 bg-background/50 text-[10px] uppercase font-bold hover:bg-cyan-500/10 text-white">
+                                <Radio className="h-3 w-3 mr-2 text-cyan-500" /> Ping Test
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={triggerShout} className="h-8 border-border/40 bg-background/50 text-[10px] uppercase font-bold hover:bg-yellow-500/10 text-white">
+                                <Bell className="h-3 w-3 mr-2 text-yellow-500" /> Broadcast Shout
+                            </Button>
+                        </div>
+                    )}
+                </div>
+
+                <TopBar currentTurn={currentTurn} players={players} diceValue={diceValue} isRolling={isRolling} onRollDice={rollDice} />
+            </header>
+
+            <div className="flex-1 flex min-h-0 overflow-hidden relative">
+                <div className="flex-1 min-w-0 relative">
+                    <GameViewport ref={viewportRef} tiles={tiles} players={players} currentTurn={currentTurn} onAddTile={addTile} onCenterCamera={centerOnPlayer} />
+                </div>
+                <aside className="hidden lg:flex lg:w-85 lg:shrink-0 border-l border-border/50 bg-background/60 backdrop-blur-md">
+                    <RuleBook rules={rules} onEditRule={(rule) => { setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setEditingRule(null); setRuleBuilderOpen(true); }} />
+                </aside>
+            </div>
+
+            <Button onClick={() => setMobileRuleBookOpen(true)} className="lg:hidden fixed bottom-6 right-6 z-50 h-14 w-14 rounded-full bg-cyan-500 hover:bg-cyan-400 text-background shadow-[0_0_20px_rgba(6,182,212,0.4)] border-4 border-background" size="icon">
+                <Book className="h-6 w-6" />
+            </Button>
+
+            <Sheet open={mobileRuleBookOpen} onOpenChange={setMobileRuleBookOpen}>
+                <SheetContent side="right" className="w-full sm:max-w-md p-0 border-l border-border/50 bg-background/95 backdrop-blur-2xl">
+                    <SheetHeader className="p-6 border-b border-border/50">
+                        <SheetTitle className="flex items-center gap-3 text-xl font-black italic tracking-tighter text-white">
+                            <Book className="h-6 w-6 text-cyan-500" /> RULE BOOK
+                        </SheetTitle>
+                    </SheetHeader>
+                    <RuleBook rules={rules} onEditRule={(rule) => { setMobileRuleBookOpen(false); setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setMobileRuleBookOpen(false); setEditingRule(null); setRuleBuilderOpen(true); }} />
+                </SheetContent>
+            </Sheet>
+
+            <RuleBuilderModal open={ruleBuilderOpen} onOpenChange={setRuleBuilderOpen} onSaveRule={handleSaveRule} editingRule={editingRule} />
         </div>
-
-        <aside className="hidden lg:flex lg:w-80 lg:shrink-0">
-          <RuleBook
-            rules={rules}
-            onEditRule={handleEditRule}
-            onDeleteRule={handleDeleteRule}
-            onAddRule={handleAddRule}
-          />
-        </aside>
-      </div>
-
-      <Button
-        onClick={() => setMobileRuleBookOpen(true)}
-        className="lg:hidden fixed bottom-6 right-6 z-50 h-14 w-14 rounded-full bg-cyan-500 hover:bg-cyan-400 text-background shadow-lg shadow-cyan-500/30"
-        size="icon"
-      >
-        <Book className="h-6 w-6" />
-        <span className="sr-only">Open Rule Book</span>
-      </Button>
-
-      <Sheet open={mobileRuleBookOpen} onOpenChange={setMobileRuleBookOpen}>
-        <SheetContent side="right" className="w-full sm:max-w-md p-0 border-l border-border">
-          <SheetHeader className="sr-only">
-            <SheetTitle>Rule Book</SheetTitle>
-          </SheetHeader>
-          <RuleBook
-            rules={rules}
-            onEditRule={(rule) => {
-              setMobileRuleBookOpen(false)
-              handleEditRule(rule)
-            }}
-            onDeleteRule={handleDeleteRule}
-            onAddRule={() => {
-              setMobileRuleBookOpen(false)
-              handleAddRule()
-            }}
-          />
-        </SheetContent>
-      </Sheet>
-
-      <RuleBuilderModal
-        open={ruleBuilderOpen}
-        onOpenChange={setRuleBuilderOpen}
-        onSaveRule={handleSaveRule}
-        editingRule={editingRule}
-      />
-    </div>
-  )
+    )
 }
