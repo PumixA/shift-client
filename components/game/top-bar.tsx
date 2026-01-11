@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import type { Player } from "@/components/shift-game"
 
 interface TopBarProps {
-  currentTurn: number
+  currentTurn: number | string
   players: Player[]
   diceValue: number | null
   isRolling: boolean
@@ -14,17 +14,26 @@ interface TopBarProps {
 }
 
 export function TopBar({ currentTurn, players, diceValue, isRolling, onRollDice }: TopBarProps) {
+  // Sécurisation : si players est vide, on affiche un état de chargement ou vide
+  if (!players || players.length === 0) {
+    return (
+      <header className="sticky top-0 z-50 h-20 shrink-0 border-b border-border bg-background/95 backdrop-blur-sm flex items-center justify-center px-4 md:px-6">
+        <span className="text-muted-foreground animate-pulse">Waiting for players...</span>
+      </header>
+    )
+  }
+
   return (
     <header className="sticky top-0 z-50 h-20 shrink-0 border-b border-border bg-background/95 backdrop-blur-sm supports-[backdrop-filter]:bg-background/80 flex items-center justify-between px-4 md:px-6">
       {/* Left - Player 1 */}
-      <PlayerCard player={players[0]} isActive={currentTurn === 1} />
+      {players[0] && <PlayerCard player={players[0]} isActive={currentTurn === players[0].id} />}
 
       {/* Center - Turn & Dice */}
       <div className="flex items-center gap-3 md:gap-6">
         <div className="text-center hidden sm:block">
           <p className="text-xs text-muted-foreground uppercase tracking-widest">Current Turn</p>
-          <p className={`text-lg font-bold ${currentTurn === 1 ? "text-cyan-400" : "text-violet-400"}`}>
-            {players.find((p) => p.id === currentTurn)?.name}
+          <p className={`text-lg font-bold ${currentTurn === (players[0]?.id) ? "text-cyan-400" : "text-violet-400"}`}>
+            {players.find((p) => p.id === currentTurn)?.name || "Unknown"}
           </p>
         </div>
 
@@ -51,12 +60,15 @@ export function TopBar({ currentTurn, players, diceValue, isRolling, onRollDice 
       </div>
 
       {/* Right - Player 2 */}
-      <PlayerCard player={players[1]} isActive={currentTurn === 2} />
+      {players[1] && <PlayerCard player={players[1]} isActive={currentTurn === players[1].id} />}
     </header>
   )
 }
 
 function PlayerCard({ player, isActive }: { player: Player; isActive: boolean }) {
+  // Sécurisation supplémentaire au cas où player serait undefined malgré le check parent
+  if (!player) return null;
+
   const glowClass = player.color === "cyan" ? "glow-cyan" : "glow-violet"
   const borderColor = player.color === "cyan" ? "border-cyan-400" : "border-violet-400"
   const textColor = player.color === "cyan" ? "text-cyan-400" : "text-violet-400"
@@ -69,7 +81,7 @@ function PlayerCard({ player, isActive }: { player: Player; isActive: boolean })
     >
       <Avatar className={`h-10 w-10 md:h-12 md:w-12 border-2 ${isActive ? borderColor : "border-border"}`}>
         <AvatarImage src={player.avatar || "/placeholder.svg"} alt={player.name} />
-        <AvatarFallback className={textColor}>{player.name[0]}</AvatarFallback>
+        <AvatarFallback className={textColor}>{player.name ? player.name[0] : "?"}</AvatarFallback>
       </Avatar>
       <div>
         <p

@@ -13,7 +13,7 @@ export interface GameViewportRef {
 interface GameViewportProps {
   tiles: Tile[]
   players: Player[]
-  currentTurn: number
+  currentTurn: number | string
   onAddTile: (direction: "up" | "down" | "left" | "right") => void
   onCenterCamera: () => void
 }
@@ -341,7 +341,7 @@ function PlayerToken({
       }}
     >
       <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-background">
-        {player.id}
+        {typeof player.id === 'string' ? player.id.substring(0, 2) : player.id}
       </span>
     </div>
   )

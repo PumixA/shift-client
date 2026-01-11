@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio } from "lucide-react"
 import { socket } from "@/services/socket"
-import { toast, Toaster } from "sonner" // ✅ Import du Toaster ajouté
+import { toast, Toaster } from "sonner"
 
 // Components
 import { TopBar } from "./game/top-bar"
@@ -17,17 +17,35 @@ import { Input } from "@/components/ui/input"
 
 // --- Interfaces ---
 export interface Tile { id: string; x: number; y: number; type: "normal" | "special" | "start" | "end" }
-export interface Player { id: number; name: string; avatar: string; score: number; color: "cyan" | "violet"; position: { x: number; y: number } }
+export interface Player { id: number | string; name: string; avatar: string; score: number; color: "cyan" | "violet"; position: { x: number; y: number } }
+
+// --- Server Interfaces (pour mapping) ---
+interface ServerTile {
+    id: string;
+    type: 'start' | 'end' | 'special' | 'normal';
+    index: number;
+}
+
+interface ServerPlayer {
+    id: string;
+    color: 'cyan' | 'violet';
+    position: number;
+    score: number;
+}
+
+interface ServerGameState {
+    roomId: string;
+    tiles: ServerTile[];
+    players: ServerPlayer[];
+}
 
 // --- Initial Data ---
+// Initialisation avec des placeholders pour éviter les crashs au premier rendu avant la synchro
 const initialTiles: Tile[] = Array.from({ length: 20 }, (_, i) => ({
     id: `tile-${i}`, x: i - 10, y: 0, type: i === 0 ? "start" : i === 19 ? "end" : i % 5 === 0 ? "special" : "normal",
 }))
 
-const initialPlayers: Player[] = [
-    { id: 1, name: "Player 1", avatar: "/cyberpunk-avatar-1.png", score: 0, color: "cyan", position: { x: -10, y: 0 } },
-    { id: 2, name: "Player 2", avatar: "/cyberpunk-avatar-2.png", score: 150, color: "violet", position: { x: -10, y: 0 } },
-]
+const initialPlayers: Player[] = []
 
 const initialRules: BuiltRule[] = [
     { id: "1", title: "Movement", trigger: { type: "roll_dice", value: "" }, conditions: [], actions: [{ type: "move_forward", value: "dice" }] },
@@ -37,7 +55,7 @@ export default function ShiftGame() {
     // --- Game State ---
     const [tiles, setTiles] = useState<Tile[]>(initialTiles)
     const [players, setPlayers] = useState<Player[]>(initialPlayers)
-    const [currentTurn, setCurrentTurn] = useState(1)
+    const [currentTurn, setCurrentTurn] = useState<number | string>(1)
     const [diceValue, setDiceValue] = useState<number | null>(null)
     const [isRolling, setIsRolling] = useState(false)
     const [rules, setRules] = useState<BuiltRule[]>(initialRules)
@@ -53,12 +71,24 @@ export default function ShiftGame() {
     const [mobileRuleBookOpen, setMobileRuleBookOpen] = useState(false)
     const viewportRef = useRef<GameViewportRef>(null)
 
+    // --- Helper: Map Server Index to Coordinates ---
+    // Cette fonction traduit l'index linéaire (0-19) du serveur en coordonnées {x, y}
+    // en se basant sur la disposition actuelle des tuiles côté client.
+    const getCoordinatesFromIndex = useCallback((index: number, currentTiles: Tile[]) => {
+        // Sécurité : si l'index est hors limites, on retourne la position de la première tuile ou (0,0)
+        if (index < 0 || index >= currentTiles.length) {
+            return currentTiles[0] ? { x: currentTiles[0].x, y: currentTiles[0].y } : { x: 0, y: 0 };
+        }
+        const targetTile = currentTiles[index]; // On suppose que l'ordre du tableau tiles correspond aux index 0-19
+        return { x: targetTile.x, y: targetTile.y };
+    }, []);
+
     // --- Socket Logic avec Logs de Debugging ---
     useEffect(() => {
         socket.connect()
 
         function onConnect() {
-            console.log("✅ Connecté au serveur Socket.io"); // Debug console
+            console.log("✅ Connecté au serveur Socket.io");
             setIsConnected(true)
             toast.success("Connecté au serveur SHIFT")
         }
@@ -74,6 +104,42 @@ export default function ShiftGame() {
             console.log("🏠 Confirmation de salle rejointe :", roomId);
             setActiveRoom(roomId)
             toast.info(`Salle rejointe : ${roomId}`)
+        }
+
+        function onGameStateSync(gameState: ServerGameState) {
+            console.log("🔄 Synchronisation de l'état du jeu :", gameState);
+
+            // 1. Mise à jour des Tuiles (si nécessaire, ici on garde la structure client pour les coords, 
+            // mais on pourrait synchroniser les types si le serveur les change)
+            // Pour l'instant, on garde les coordonnées initiales du client car le serveur n'envoie que des index.
+            // Si le serveur devait gérer la map, il faudrait qu'il envoie x et y.
+            // Ici, on fait confiance à l'ordre : index 0 = tiles[0]
+            
+            // 2. Mise à jour des Joueurs
+            const syncedPlayers: Player[] = gameState.players.map((p, idx) => {
+                // Calcul de la position {x, y} à partir de l'index serveur
+                // Note: On utilise 'initialTiles' ou 'tiles' (state) pour la référence.
+                // Comme on est dans un callback, 'tiles' peut être stale si on ne l'ajoute pas aux dépendances,
+                // mais ici on va utiliser une approche fonctionnelle ou ref si besoin.
+                // Pour simplifier, on utilise initialTiles car la map ne change pas dynamiquement pour l'instant.
+                // Idéalement, il faudrait utiliser le state 'tiles' courant.
+                
+                // Hack temporaire : on utilise initialTiles pour mapper les coords car tiles state est complexe à accéder ici sans ref
+                // Dans une version future, le serveur devrait envoyer x/y ou on utilise un ref pour tiles.
+                const coords = initialTiles[p.position] ? { x: initialTiles[p.position].x, y: initialTiles[p.position].y } : { x: 0, y: 0 };
+
+                return {
+                    id: p.id,
+                    name: `Player ${idx + 1}`, // Nom générique ou récupéré si dispo
+                    avatar: `/cyberpunk-avatar-${(idx % 2) + 1}.png`,
+                    score: p.score,
+                    color: p.color,
+                    position: coords
+                };
+            });
+
+            setPlayers(syncedPlayers);
+            toast.success("État du jeu synchronisé !");
         }
 
         function onPlayerJoined(data: { id: string, message: string }) {
@@ -105,6 +171,7 @@ export default function ShiftGame() {
         socket.on("connect", onConnect)
         socket.on("disconnect", onDisconnect)
         socket.on("room_joined", onRoomJoined)
+        socket.on("game_state_sync", onGameStateSync) // ✅ Nouvel écouteur
         socket.on("player_joined_room", onPlayerJoined)
         socket.on("pong_response", onPongResponse)
         socket.on("incoming_shout", onIncomingShout)
@@ -113,6 +180,7 @@ export default function ShiftGame() {
             socket.off("connect", onConnect)
             socket.off("disconnect", onDisconnect)
             socket.off("room_joined", onRoomJoined)
+            socket.off("game_state_sync", onGameStateSync)
             socket.off("player_joined_room", onPlayerJoined)
             socket.off("pong_response", onPongResponse)
             socket.off("incoming_shout", onIncomingShout)
@@ -154,8 +222,10 @@ export default function ShiftGame() {
                 const finalValue = Math.floor(Math.random() * 6) + 1
                 setDiceValue(finalValue)
                 setIsRolling(false)
+                // Note: La logique de mise à jour du score devrait idéalement passer par le serveur maintenant
+                // Pour l'instant, on garde la logique locale pour l'animation, mais il faudra émettre un event 'move_player'
                 setPlayers((prev) => prev.map((p) => (p.id === currentTurn ? { ...p, score: p.score + finalValue * 10 } : p)))
-                setCurrentTurn((prev) => (prev === 1 ? 2 : 1))
+                // setCurrentTurn((prev) => (prev === 1 ? 2 : 1)) // À adapter avec les IDs string
             }
         }, 100)
     }, [isRolling, currentTurn])
