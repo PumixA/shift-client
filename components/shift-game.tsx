@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio } from "lucide-react"
+import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio, Trophy, RotateCcw, RefreshCw } from "lucide-react"
 import { socket } from "@/services/socket"
 import { toast, Toaster } from "sonner"
 
@@ -38,6 +38,7 @@ interface ServerGameState {
     tiles: ServerTile[];
     players: ServerPlayer[];
     currentTurn: string;
+    status: 'playing' | 'finished';
 }
 
 // --- Initial Data ---
@@ -52,14 +53,58 @@ const initialRules: BuiltRule[] = [
     { id: "1", title: "Movement", trigger: { type: "roll_dice", value: "" }, conditions: [], actions: [{ type: "move_forward", value: "dice" }] },
 ]
 
+// --- Victory Overlay Component ---
+const VictoryOverlay = ({ winner, onReset }: { winner: { id: string; name: string; color?: string }, onReset: () => void }) => {
+    const borderColor = winner.color === 'cyan' ? 'border-cyan-500' : winner.color === 'violet' ? 'border-violet-500' : 'border-yellow-500';
+    const glowColor = winner.color === 'cyan' ? 'shadow-cyan-500/50' : winner.color === 'violet' ? 'shadow-violet-500/50' : 'shadow-yellow-500/50';
+    const textColor = winner.color === 'cyan' ? 'text-cyan-400' : winner.color === 'violet' ? 'text-violet-400' : 'text-yellow-400';
+
+    return (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-700">
+            <div className={`relative text-center space-y-8 p-12 bg-background/80 border-2 ${borderColor} rounded-3xl shadow-[0_0_100px_rgba(0,0,0,0.5)] ${glowColor} max-w-2xl w-full mx-4`}>
+                
+                {/* Decorative Elements */}
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-white/50 to-transparent opacity-50" />
+                <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-white/50 to-transparent opacity-50" />
+
+                <div className="relative">
+                    <Trophy className={`h-32 w-32 mx-auto mb-6 ${textColor} drop-shadow-[0_0_15px_rgba(255,255,255,0.3)] animate-bounce`} />
+                    <div className={`absolute inset-0 blur-3xl opacity-20 bg-gradient-to-t from-${winner.color === 'cyan' ? 'cyan' : 'violet'}-500 to-transparent`} />
+                </div>
+
+                <div className="space-y-2">
+                    <h2 className="text-2xl md:text-3xl font-black tracking-[0.5em] text-muted-foreground uppercase">
+                        MISSION ACCOMPLIE
+                    </h2>
+                    <h1 className={`text-5xl md:text-7xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-white via-${winner.color === 'cyan' ? 'cyan' : 'violet'}-400 to-white animate-pulse`}>
+                        {winner.name}
+                    </h1>
+                    <p className="text-xl text-muted-foreground font-mono mt-4">
+                        SYSTÈME SÉCURISÉ. MENACE ÉLIMINÉE.
+                    </p>
+                </div>
+
+                <Button 
+                    onClick={onReset}
+                    className={`mt-12 bg-transparent border-2 ${borderColor} ${textColor} hover:bg-${winner.color === 'cyan' ? 'cyan' : 'violet'}-500/10 font-black py-8 px-10 text-xl rounded-xl shadow-[0_0_30px_rgba(0,0,0,0.3)] transition-all hover:scale-105 uppercase tracking-widest`}
+                >
+                    <RotateCcw className="mr-3 h-6 w-6" /> Retour au Terminal
+                </Button>
+            </div>
+        </div>
+    );
+};
+
 export default function ShiftGame() {
     // --- Game State ---
     const [tiles, setTiles] = useState<Tile[]>(initialTiles)
     const [players, setPlayers] = useState<Player[]>(initialPlayers)
-    const [currentTurn, setCurrentTurn] = useState<number | string>(1)
+    const [currentTurnId, setCurrentTurnId] = useState<string>("") // Renommé pour clarté
     const [diceValue, setDiceValue] = useState<number | null>(null)
     const [isRolling, setIsRolling] = useState(false)
     const [rules, setRules] = useState<BuiltRule[]>(initialRules)
+    const [winner, setWinner] = useState<{ id: string; name: string; color?: string } | null>(null)
+    const [gameStatus, setGameStatus] = useState<'playing' | 'finished'>('playing')
 
     // --- Socket & Room State ---
     const [isConnected, setIsConnected] = useState(socket.connected)
@@ -73,18 +118,30 @@ export default function ShiftGame() {
     const viewportRef = useRef<GameViewportRef>(null)
 
     // --- Helper: Map Server Index to Coordinates ---
-    // Cette fonction traduit l'index linéaire (0-19) du serveur en coordonnées {x, y}
-    // en se basant sur la disposition actuelle des tuiles côté client.
     const getCoordinatesFromIndex = useCallback((index: number, currentTiles: Tile[]) => {
-        // Sécurité : si l'index est hors limites, on retourne la position de la première tuile ou (0,0)
         if (index < 0 || index >= currentTiles.length) {
             return currentTiles[0] ? { x: currentTiles[0].x, y: currentTiles[0].y } : { x: 0, y: 0 };
         }
-        const targetTile = currentTiles[index]; // On suppose que l'ordre du tableau tiles correspond aux index 0-19
+        const targetTile = currentTiles[index];
         return { x: targetTile.x, y: targetTile.y };
     }, []);
 
-    // --- Socket Logic avec Logs de Debugging ---
+    // --- Helper: Map Server Players to Client Players ---
+    const mapServerPlayersToClient = useCallback((serverPlayers: ServerPlayer[]) => {
+        return serverPlayers.map((p, idx) => {
+            const coords = getCoordinatesFromIndex(p.position, initialTiles);
+            return {
+                id: p.id,
+                name: `Player ${idx + 1}`,
+                avatar: `/cyberpunk-avatar-${(idx % 2) + 1}.png`,
+                score: p.score,
+                color: p.color,
+                position: coords
+            };
+        });
+    }, [getCoordinatesFromIndex]);
+
+    // --- Socket Logic ---
     useEffect(() => {
         socket.connect()
 
@@ -104,38 +161,39 @@ export default function ShiftGame() {
         function onRoomJoined(roomId: string) {
             console.log("🏠 Confirmation de salle rejointe :", roomId);
             setActiveRoom(roomId)
+            setWinner(null)
+            setGameStatus('playing')
             toast.info(`Salle rejointe : ${roomId}`)
         }
 
         function onGameStateSync(gameState: ServerGameState) {
             console.log("🔄 Synchronisation de l'état du jeu :", gameState);
-
-            // 1. Mise à jour des Joueurs
-            const syncedPlayers: Player[] = gameState.players.map((p, idx) => {
-                // Hack temporaire : on utilise initialTiles pour mapper les coords
-                const coords = initialTiles[p.position] ? { x: initialTiles[p.position].x, y: initialTiles[p.position].y } : { x: 0, y: 0 };
-
-                return {
-                    id: p.id,
-                    name: `Player ${idx + 1}`,
-                    avatar: `/cyberpunk-avatar-${(idx % 2) + 1}.png`,
-                    score: p.score,
-                    color: p.color,
-                    position: coords
-                };
-            });
-
+            const syncedPlayers = mapServerPlayersToClient(gameState.players);
             setPlayers(syncedPlayers);
             if (gameState.currentTurn) {
-                setCurrentTurn(gameState.currentTurn);
+                setCurrentTurnId(gameState.currentTurn);
             }
+            setGameStatus(gameState.status);
+            
+            // Correction UI : Si la partie est finie mais qu'on n'a pas reçu game_over (reconnexion)
+            if (gameState.status === 'finished') {
+                // On cherche le gagnant (celui qui est à la position 19)
+                const winningPlayer = gameState.players.find(p => p.position === 19);
+                if (winningPlayer) {
+                    const winnerIndex = gameState.players.findIndex(p => p.id === winningPlayer.id);
+                    setWinner({
+                        id: winningPlayer.id,
+                        name: `Player ${winnerIndex + 1}`,
+                        color: winningPlayer.color
+                    });
+                }
+            }
+
             toast.success("État du jeu synchronisé !");
         }
 
         function onDiceResult(data: { diceValue: number, players: ServerPlayer[], currentTurn: string }) {
             console.log("🎲 Résultat du dé reçu :", data);
-            
-            // 1. Animation du dé
             setIsRolling(true);
             let rolls = 0;
             const interval = setInterval(() => {
@@ -145,27 +203,26 @@ export default function ShiftGame() {
                     clearInterval(interval);
                     setDiceValue(data.diceValue);
                     setIsRolling(false);
-                    
-                    // 2. Mise à jour des joueurs et du tour APRES l'animation
-                    const syncedPlayers: Player[] = data.players.map((p, idx) => {
-                        const coords = initialTiles[p.position] ? { x: initialTiles[p.position].x, y: initialTiles[p.position].y } : { x: 0, y: 0 };
-                        return {
-                            id: p.id,
-                            name: `Player ${idx + 1}`,
-                            avatar: `/cyberpunk-avatar-${(idx % 2) + 1}.png`,
-                            score: p.score,
-                            color: p.color,
-                            position: coords
-                        };
-                    });
+                    const syncedPlayers = mapServerPlayersToClient(data.players);
                     setPlayers(syncedPlayers);
-                    setCurrentTurn(data.currentTurn);
-                    
-                    toast.info(`Résultat du dé : ${data.diceValue}`, {
-                        icon: "🎲"
-                    });
+                    setCurrentTurnId(data.currentTurn);
+                    toast.info(`Résultat du dé : ${data.diceValue}`, { icon: "🎲" });
                 }
             }, 50);
+        }
+
+        function onGameOver(data: { winnerId: string, winnerName: string }) {
+            console.log("🏆 Fin de partie reçue :", data);
+            setWinner({ id: data.winnerId, name: data.winnerName, color: 'cyan' }); 
+            setGameStatus('finished');
+            toast.success(`Victoire de ${data.winnerName} !`, { duration: 5000, icon: "🏆" });
+        }
+
+        function onGameReset(data: { message: string }) {
+            console.log("🔄 Reset reçu :", data.message);
+            toast.info(data.message);
+            // On force un rechargement pour nettoyer l'état proprement
+            window.location.reload();
         }
 
         function onError(data: { message: string }) {
@@ -202,8 +259,10 @@ export default function ShiftGame() {
         socket.on("disconnect", onDisconnect)
         socket.on("room_joined", onRoomJoined)
         socket.on("game_state_sync", onGameStateSync)
-        socket.on("dice_result", onDiceResult) // ✅ Nouvel écouteur
-        socket.on("error", onError) // ✅ Gestion des erreurs
+        socket.on("dice_result", onDiceResult)
+        socket.on("game_over", onGameOver)
+        socket.on("game_reset", onGameReset) // ✅ Nouvel écouteur
+        socket.on("error", onError)
         socket.on("player_joined_room", onPlayerJoined)
         socket.on("pong_response", onPongResponse)
         socket.on("incoming_shout", onIncomingShout)
@@ -214,19 +273,45 @@ export default function ShiftGame() {
             socket.off("room_joined", onRoomJoined)
             socket.off("game_state_sync", onGameStateSync)
             socket.off("dice_result", onDiceResult)
+            socket.off("game_over", onGameOver)
+            socket.off("game_reset", onGameReset)
             socket.off("error", onError)
             socket.off("player_joined_room", onPlayerJoined)
             socket.off("pong_response", onPongResponse)
             socket.off("incoming_shout", onIncomingShout)
             socket.disconnect()
         }
-    }, [])
+    }, [mapServerPlayersToClient])
+
+    // Update winner color when players change if winner is set
+    useEffect(() => {
+        if (winner && players.length > 0) {
+            const winningPlayer = players.find(p => p.id === winner.id);
+            if (winningPlayer && winningPlayer.color !== winner.color) {
+                setWinner(prev => prev ? { ...prev, color: winningPlayer.color } : null);
+            }
+        }
+    }, [players, winner?.id]);
 
     // --- Handlers ---
     const handleJoinRoom = () => {
         if (roomInput.trim()) {
             console.log("📤 Émission join_room :", roomInput.trim());
             socket.emit("join_room", roomInput.trim())
+        }
+    }
+
+    const handleLeaveRoom = () => {
+        setActiveRoom(null);
+        setWinner(null);
+        setGameStatus('playing');
+        setPlayers([]);
+    }
+
+    const handleResetServer = () => {
+        if (activeRoom) {
+            console.log("📤 Émission reset_game");
+            socket.emit("reset_game", { roomId: activeRoom });
         }
     }
 
@@ -244,19 +329,16 @@ export default function ShiftGame() {
     }
 
     const rollDice = useCallback(() => {
-        if (isRolling || !activeRoom) return;
+        if (isRolling || !activeRoom || gameStatus === 'finished') return;
         
-        // Vérification locale pour UX (le serveur fera la vérification finale)
-        if (currentTurn !== socket.id) {
+        if (currentTurnId !== socket.id) {
             toast.warning("Ce n'est pas votre tour !");
             return;
         }
 
         console.log("🎲 Demande de lancer de dé envoyée au serveur");
         socket.emit("roll_dice", { roomId: activeRoom });
-        
-        // On ne lance plus l'animation ici, on attend la réponse du serveur
-    }, [isRolling, activeRoom, currentTurn])
+    }, [isRolling, activeRoom, currentTurnId, gameStatus])
 
     const addTile = useCallback((direction: "up" | "down" | "left" | "right") => {
         setTiles((prev) => {
@@ -278,11 +360,11 @@ export default function ShiftGame() {
     }, [])
 
     const centerOnPlayer = useCallback(() => {
-        const currentPlayer = players.find((p) => p.id === currentTurn)
+        const currentPlayer = players.find((p) => p.id === currentTurnId)
         if (currentPlayer && viewportRef.current) {
             viewportRef.current.centerOnTile(currentPlayer.position.x, currentPlayer.position.y)
         }
-    }, [players, currentTurn])
+    }, [players, currentTurnId])
 
     const handleSaveRule = (rule: BuiltRule) => {
         setRules((prev) => {
@@ -296,9 +378,11 @@ export default function ShiftGame() {
     }
 
     return (
-        <div className="h-screen w-screen flex flex-col overflow-hidden bg-background text-foreground">
-            {/* ✅ Ajout du Toaster pour rendre les notifications visibles */}
+        <div className="h-screen w-screen flex flex-col overflow-hidden bg-background text-foreground relative">
             <Toaster position="bottom-right" theme="dark" richColors />
+
+            {/* ✅ Victory Overlay */}
+            {winner && <VictoryOverlay winner={winner} onReset={handleLeaveRoom} />}
 
             <header className="relative z-50 bg-background/95 backdrop-blur border-b border-border/50 px-4 py-2 flex items-center justify-between shadow-2xl shadow-cyan-500/5">
                 <div className="flex items-center gap-6">
@@ -339,16 +423,20 @@ export default function ShiftGame() {
                             <Button variant="outline" size="sm" onClick={triggerShout} className="h-8 border-border/40 bg-background/50 text-[10px] uppercase font-bold hover:bg-yellow-500/10 text-white">
                                 <Bell className="h-3 w-3 mr-2 text-yellow-500" /> Broadcast Shout
                             </Button>
+                            {/* Bouton Reset pour Dev */}
+                            <Button variant="destructive" size="sm" onClick={handleResetServer} className="h-8 border-border/40 text-[10px] uppercase font-bold hover:bg-red-500/20 text-white">
+                                <RefreshCw className="h-3 w-3 mr-2" /> Reset Server
+                            </Button>
                         </div>
                     )}
                 </div>
 
-                <TopBar currentTurn={currentTurn} players={players} diceValue={diceValue} isRolling={isRolling} onRollDice={rollDice} />
+                <TopBar currentTurnId={currentTurnId} players={players} diceValue={diceValue} isRolling={isRolling} onRollDice={rollDice} gameStatus={gameStatus} />
             </header>
 
             <div className="flex-1 flex min-h-0 overflow-hidden relative">
                 <div className="flex-1 min-w-0 relative">
-                    <GameViewport ref={viewportRef} tiles={tiles} players={players} currentTurn={currentTurn} onAddTile={addTile} onCenterCamera={centerOnPlayer} />
+                    <GameViewport ref={viewportRef} tiles={tiles} players={players} currentTurn={currentTurnId} onAddTile={addTile} onCenterCamera={centerOnPlayer} />
                 </div>
                 <aside className="hidden lg:flex lg:w-85 lg:shrink-0 border-l border-border/50 bg-background/60 backdrop-blur-md">
                     <RuleBook rules={rules} onEditRule={(rule) => { setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setEditingRule(null); setRuleBuilderOpen(true); }} />
