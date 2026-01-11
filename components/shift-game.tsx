@@ -37,6 +37,7 @@ interface ServerGameState {
     roomId: string;
     tiles: ServerTile[];
     players: ServerPlayer[];
+    currentTurn: string;
 }
 
 // --- Initial Data ---
@@ -109,28 +110,14 @@ export default function ShiftGame() {
         function onGameStateSync(gameState: ServerGameState) {
             console.log("🔄 Synchronisation de l'état du jeu :", gameState);
 
-            // 1. Mise à jour des Tuiles (si nécessaire, ici on garde la structure client pour les coords, 
-            // mais on pourrait synchroniser les types si le serveur les change)
-            // Pour l'instant, on garde les coordonnées initiales du client car le serveur n'envoie que des index.
-            // Si le serveur devait gérer la map, il faudrait qu'il envoie x et y.
-            // Ici, on fait confiance à l'ordre : index 0 = tiles[0]
-            
-            // 2. Mise à jour des Joueurs
+            // 1. Mise à jour des Joueurs
             const syncedPlayers: Player[] = gameState.players.map((p, idx) => {
-                // Calcul de la position {x, y} à partir de l'index serveur
-                // Note: On utilise 'initialTiles' ou 'tiles' (state) pour la référence.
-                // Comme on est dans un callback, 'tiles' peut être stale si on ne l'ajoute pas aux dépendances,
-                // mais ici on va utiliser une approche fonctionnelle ou ref si besoin.
-                // Pour simplifier, on utilise initialTiles car la map ne change pas dynamiquement pour l'instant.
-                // Idéalement, il faudrait utiliser le state 'tiles' courant.
-                
-                // Hack temporaire : on utilise initialTiles pour mapper les coords car tiles state est complexe à accéder ici sans ref
-                // Dans une version future, le serveur devrait envoyer x/y ou on utilise un ref pour tiles.
+                // Hack temporaire : on utilise initialTiles pour mapper les coords
                 const coords = initialTiles[p.position] ? { x: initialTiles[p.position].x, y: initialTiles[p.position].y } : { x: 0, y: 0 };
 
                 return {
                     id: p.id,
-                    name: `Player ${idx + 1}`, // Nom générique ou récupéré si dispo
+                    name: `Player ${idx + 1}`,
                     avatar: `/cyberpunk-avatar-${(idx % 2) + 1}.png`,
                     score: p.score,
                     color: p.color,
@@ -139,7 +126,50 @@ export default function ShiftGame() {
             });
 
             setPlayers(syncedPlayers);
+            if (gameState.currentTurn) {
+                setCurrentTurn(gameState.currentTurn);
+            }
             toast.success("État du jeu synchronisé !");
+        }
+
+        function onDiceResult(data: { diceValue: number, players: ServerPlayer[], currentTurn: string }) {
+            console.log("🎲 Résultat du dé reçu :", data);
+            
+            // 1. Animation du dé
+            setIsRolling(true);
+            let rolls = 0;
+            const interval = setInterval(() => {
+                setDiceValue(Math.floor(Math.random() * 6) + 1);
+                rolls++;
+                if (rolls >= 10) {
+                    clearInterval(interval);
+                    setDiceValue(data.diceValue);
+                    setIsRolling(false);
+                    
+                    // 2. Mise à jour des joueurs et du tour APRES l'animation
+                    const syncedPlayers: Player[] = data.players.map((p, idx) => {
+                        const coords = initialTiles[p.position] ? { x: initialTiles[p.position].x, y: initialTiles[p.position].y } : { x: 0, y: 0 };
+                        return {
+                            id: p.id,
+                            name: `Player ${idx + 1}`,
+                            avatar: `/cyberpunk-avatar-${(idx % 2) + 1}.png`,
+                            score: p.score,
+                            color: p.color,
+                            position: coords
+                        };
+                    });
+                    setPlayers(syncedPlayers);
+                    setCurrentTurn(data.currentTurn);
+                    
+                    toast.info(`Résultat du dé : ${data.diceValue}`, {
+                        icon: "🎲"
+                    });
+                }
+            }, 50);
+        }
+
+        function onError(data: { message: string }) {
+            toast.error(data.message);
         }
 
         function onPlayerJoined(data: { id: string, message: string }) {
@@ -171,7 +201,9 @@ export default function ShiftGame() {
         socket.on("connect", onConnect)
         socket.on("disconnect", onDisconnect)
         socket.on("room_joined", onRoomJoined)
-        socket.on("game_state_sync", onGameStateSync) // ✅ Nouvel écouteur
+        socket.on("game_state_sync", onGameStateSync)
+        socket.on("dice_result", onDiceResult) // ✅ Nouvel écouteur
+        socket.on("error", onError) // ✅ Gestion des erreurs
         socket.on("player_joined_room", onPlayerJoined)
         socket.on("pong_response", onPongResponse)
         socket.on("incoming_shout", onIncomingShout)
@@ -181,6 +213,8 @@ export default function ShiftGame() {
             socket.off("disconnect", onDisconnect)
             socket.off("room_joined", onRoomJoined)
             socket.off("game_state_sync", onGameStateSync)
+            socket.off("dice_result", onDiceResult)
+            socket.off("error", onError)
             socket.off("player_joined_room", onPlayerJoined)
             socket.off("pong_response", onPongResponse)
             socket.off("incoming_shout", onIncomingShout)
@@ -209,26 +243,20 @@ export default function ShiftGame() {
         }
     }
 
-    // ... (Handlers rollDice, addTile, centerOnPlayer, handleSaveRule inchangés)
     const rollDice = useCallback(() => {
-        if (isRolling) return
-        setIsRolling(true)
-        let rolls = 0
-        const interval = setInterval(() => {
-            setDiceValue(Math.floor(Math.random() * 6) + 1)
-            rolls++
-            if (rolls >= 10) {
-                clearInterval(interval)
-                const finalValue = Math.floor(Math.random() * 6) + 1
-                setDiceValue(finalValue)
-                setIsRolling(false)
-                // Note: La logique de mise à jour du score devrait idéalement passer par le serveur maintenant
-                // Pour l'instant, on garde la logique locale pour l'animation, mais il faudra émettre un event 'move_player'
-                setPlayers((prev) => prev.map((p) => (p.id === currentTurn ? { ...p, score: p.score + finalValue * 10 } : p)))
-                // setCurrentTurn((prev) => (prev === 1 ? 2 : 1)) // À adapter avec les IDs string
-            }
-        }, 100)
-    }, [isRolling, currentTurn])
+        if (isRolling || !activeRoom) return;
+        
+        // Vérification locale pour UX (le serveur fera la vérification finale)
+        if (currentTurn !== socket.id) {
+            toast.warning("Ce n'est pas votre tour !");
+            return;
+        }
+
+        console.log("🎲 Demande de lancer de dé envoyée au serveur");
+        socket.emit("roll_dice", { roomId: activeRoom });
+        
+        // On ne lance plus l'animation ici, on attend la réponse du serveur
+    }, [isRolling, activeRoom, currentTurn])
 
     const addTile = useCallback((direction: "up" | "down" | "left" | "right") => {
         setTiles((prev) => {
