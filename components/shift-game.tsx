@@ -41,6 +41,11 @@ interface ServerGameState {
     status: 'playing' | 'finished';
 }
 
+interface RuleLog {
+    ruleId: string;
+    message: string;
+}
+
 // --- Initial Data ---
 // Initialisation avec des placeholders pour éviter les crashs au premier rendu avant la synchro
 const initialTiles: Tile[] = Array.from({ length: 20 }, (_, i) => ({
@@ -192,7 +197,7 @@ export default function ShiftGame() {
             toast.success("État du jeu synchronisé !");
         }
 
-        function onDiceResult(data: { diceValue: number, players: ServerPlayer[], currentTurn: string }) {
+        function onDiceResult(data: { diceValue: number, players: ServerPlayer[], currentTurn: string, logs?: RuleLog[] }) {
             console.log("🎲 Résultat du dé reçu :", data);
             setIsRolling(true);
             let rolls = 0;
@@ -207,6 +212,21 @@ export default function ShiftGame() {
                     setPlayers(syncedPlayers);
                     setCurrentTurnId(data.currentTurn);
                     toast.info(`Résultat du dé : ${data.diceValue}`, { icon: "🎲" });
+
+                    // Affichage des logs de règles
+                    if (data.logs && data.logs.length > 0) {
+                        setTimeout(() => {
+                            data.logs?.forEach((log, index) => {
+                                setTimeout(() => {
+                                    toast.info(log.message, {
+                                        icon: "⚡",
+                                        duration: 4000,
+                                        className: "border-l-4 border-yellow-500"
+                                    });
+                                }, index * 800); // Délai progressif entre chaque log
+                            });
+                        }, 500); // Petit délai après le mouvement
+                    }
                 }
             }, 50);
         }
