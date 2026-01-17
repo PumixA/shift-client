@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useMemo } from "react"
-import { Blocks, Zap, Play, X, Plus, Trash2 } from "lucide-react"
+import { useState, useMemo, useEffect } from "react"
+import { Blocks, Zap, Play, X, Plus, Trash2, Crosshair } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,6 +16,8 @@ interface RuleBuilderModalProps {
   onOpenChange: (open: boolean) => void
   onSaveRule: (rule: Rule) => void
   editingRule?: Rule | null
+  initialData?: Partial<Rule>
+  onStartSelection?: (currentData: Partial<Rule>) => void
 }
 
 // Trigger options
@@ -41,12 +43,22 @@ const targetOptions = [
   { value: 'others', label: "Other Players" },
 ]
 
-export function RuleBuilderModal({ open, onOpenChange, onSaveRule, editingRule }: RuleBuilderModalProps) {
-  const [title, setTitle] = useState(editingRule?.title || "")
-  const [triggerType, setTriggerType] = useState<TriggerType>(editingRule?.trigger.type || TriggerType.ON_LAND)
-  const [triggerValue, setTriggerValue] = useState<string>(editingRule?.trigger.value?.toString() || "")
+export function RuleBuilderModal({ open, onOpenChange, onSaveRule, editingRule, initialData, onStartSelection }: RuleBuilderModalProps) {
+  const [title, setTitle] = useState(editingRule?.title || initialData?.title || "")
+  const [triggerType, setTriggerType] = useState<TriggerType>(editingRule?.trigger.type || initialData?.trigger?.type || TriggerType.ON_LAND)
+  const [triggerValue, setTriggerValue] = useState<string>(editingRule?.trigger.value?.toString() || initialData?.trigger?.value?.toString() || "")
   
-  const [effects, setEffects] = useState<RuleEffect[]>(editingRule?.effects || [{ type: ActionType.MODIFY_SCORE, value: 50, target: 'self' }])
+  const [effects, setEffects] = useState<RuleEffect[]>(editingRule?.effects || initialData?.effects || [{ type: ActionType.MODIFY_SCORE, value: 50, target: 'self' }])
+
+  // Update state when initialData changes (e.g. returning from selection)
+  useEffect(() => {
+    if (initialData) {
+      if (initialData.title) setTitle(initialData.title)
+      if (initialData.trigger?.type) setTriggerType(initialData.trigger.type)
+      if (initialData.trigger?.value !== undefined) setTriggerValue(initialData.trigger.value.toString())
+      if (initialData.effects) setEffects(initialData.effects)
+    }
+  }, [initialData])
 
   // Generate plain English preview
   const rulePreview = useMemo(() => {
@@ -90,6 +102,19 @@ export function RuleBuilderModal({ open, onOpenChange, onSaveRule, editingRule }
     // @ts-ignore
     updated[index] = { ...updated[index], [field]: value }
     setEffects(updated)
+  }
+
+  const handleSelectionClick = () => {
+    if (onStartSelection) {
+      onStartSelection({
+        title,
+        trigger: {
+          type: triggerType,
+          value: triggerValue ? Number(triggerValue) : undefined
+        },
+        effects
+      })
+    }
   }
 
   const handleSave = () => {
@@ -171,13 +196,24 @@ export function RuleBuilderModal({ open, onOpenChange, onSaveRule, editingRule }
                   {(triggerType === TriggerType.ON_LAND || triggerType === TriggerType.ON_PASS_OVER) && (
                     <div className="flex items-center gap-2">
                         <Label className="text-xs text-muted-foreground whitespace-nowrap">Case spécifique (Index):</Label>
-                        <Input 
-                            type="number"
-                            value={triggerValue} 
-                            onChange={(e) => setTriggerValue(e.target.value)}
-                            placeholder="Ex: 0, 19..."
-                            className="w-[100px] bg-secondary border-yellow-400/30 focus:border-yellow-400"
-                        />
+                        <div className="flex items-center gap-1">
+                          <Input 
+                              type="number"
+                              value={triggerValue} 
+                              onChange={(e) => setTriggerValue(e.target.value)}
+                              placeholder="Ex: 0, 19..."
+                              className="w-[100px] bg-secondary border-yellow-400/30 focus:border-yellow-400"
+                          />
+                          <Button 
+                            variant="outline" 
+                            size="icon" 
+                            onClick={handleSelectionClick}
+                            className="h-10 w-10 border-yellow-400/30 hover:bg-yellow-400/10 hover:text-yellow-400"
+                            title="Sélectionner sur le plateau"
+                          >
+                            <Crosshair className="h-4 w-4" />
+                          </Button>
+                        </div>
                     </div>
                   )}
                    {triggerType === TriggerType.ON_DICE_ROLL && (

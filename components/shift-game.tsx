@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio, Trophy, RotateCcw, RefreshCw, Plus } from "lucide-react"
+import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio, Trophy, RotateCcw, RefreshCw, Plus, Crosshair } from "lucide-react"
 import { socket } from "@/services/socket"
 import { toast, Toaster } from "sonner"
 
@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { Rule } from "@/src/types/rules"
+import { Rule, TriggerType } from "@/src/types/rules"
 
 // --- Interfaces ---
 export interface Tile { id: string; x: number; y: number; type: "normal" | "special" | "start" | "end" }
@@ -119,6 +119,10 @@ export default function ShiftGame() {
     const [editingRule, setEditingRule] = useState<Rule | null>(null)
     const [mobileRuleBookOpen, setMobileRuleBookOpen] = useState(false)
     const viewportRef = useRef<GameViewportRef>(null)
+
+    // --- Interactive Targeting State ---
+    const [draftRule, setDraftRule] = useState<Partial<Rule> | null>(null)
+    const [isSelectingTile, setIsSelectingTile] = useState(false)
 
     // --- Helper: Map Server Index to Coordinates ---
     const getCoordinatesFromIndex = useCallback((index: number, currentTiles: Tile[]) => {
@@ -407,6 +411,35 @@ export default function ShiftGame() {
         console.log('📤 Sending rule to server:', rule);
         socket.emit('create_rule', rule);
         setEditingRule(null)
+        setDraftRule(null) // Clear draft
+    }
+
+    // --- Interactive Targeting Handlers ---
+    const handleStartSelection = (currentData: Partial<Rule>) => {
+        setDraftRule(currentData)
+        setRuleBuilderOpen(false)
+        setIsSelectingTile(true)
+        toast.info("Cliquez sur une case du plateau pour la sélectionner", {
+            duration: 5000,
+            icon: <Crosshair className="h-4 w-4 text-yellow-400" />
+        })
+    }
+
+    const handleTileClick = (index: number) => {
+        if (!isSelectingTile) return
+
+        // Update draft rule with selected tile
+        const updatedDraft = {
+            ...draftRule,
+            trigger: {
+                type: TriggerType.ON_LAND,
+                value: index
+            }
+        }
+        setDraftRule(updatedDraft)
+        setIsSelectingTile(false)
+        setRuleBuilderOpen(true)
+        toast.success(`Case ${index} sélectionnée !`)
     }
 
     return (
@@ -465,7 +498,7 @@ export default function ShiftGame() {
 
                 <div className="flex items-center gap-4">
                     <Button 
-                        onClick={() => { setEditingRule(null); setRuleBuilderOpen(true); }}
+                        onClick={() => { setEditingRule(null); setDraftRule(null); setRuleBuilderOpen(true); }}
                         className="bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border border-cyan-400/50"
                     >
                         <Plus className="h-4 w-4 mr-2" />
@@ -477,11 +510,37 @@ export default function ShiftGame() {
 
             <div className="flex-1 flex min-h-0 overflow-hidden relative">
                 <div className="flex-1 min-w-0 relative">
-                    <GameViewport ref={viewportRef} tiles={tiles} players={players} currentTurn={currentTurnId} onAddTile={addTile} onCenterCamera={centerOnPlayer} />
+                    <GameViewport 
+                        ref={viewportRef} 
+                        tiles={tiles} 
+                        players={players} 
+                        currentTurn={currentTurnId} 
+                        onAddTile={addTile} 
+                        onCenterCamera={centerOnPlayer}
+                        isSelectionMode={isSelectingTile}
+                        onTileClick={handleTileClick}
+                    />
+                    
+                    {/* Selection Mode Overlay */}
+                    {isSelectingTile && (
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-6 py-3 rounded-full border border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.3)] animate-pulse flex items-center gap-3 z-50">
+                            <Crosshair className="h-5 w-5 text-yellow-400 animate-spin-slow" />
+                            <span className="font-bold tracking-wide">MODE SÉLECTION : CLIQUEZ SUR UNE CASE</span>
+                            <Button 
+                                size="sm" 
+                                variant="ghost" 
+                                className="h-6 w-6 p-0 rounded-full hover:bg-white/20 ml-2"
+                                onClick={() => { setIsSelectingTile(false); setRuleBuilderOpen(true); }}
+                            >
+                                <span className="sr-only">Annuler</span>
+                                <div className="h-4 w-4 rotate-45 bg-white/50" />
+                            </Button>
+                        </div>
+                    )}
                 </div>
                 <aside className="hidden lg:flex lg:w-85 lg:shrink-0 border-l border-border/50 bg-background/60 backdrop-blur-md">
                     {/* @ts-ignore */}
-                    <RuleBook rules={rules} onEditRule={(rule) => { setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setEditingRule(null); setRuleBuilderOpen(true); }} />
+                    <RuleBook rules={rules} onEditRule={(rule) => { setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setEditingRule(null); setDraftRule(null); setRuleBuilderOpen(true); }} />
                 </aside>
             </div>
 
@@ -497,11 +556,18 @@ export default function ShiftGame() {
                         </SheetTitle>
                     </SheetHeader>
                     {/* @ts-ignore */}
-                    <RuleBook rules={rules} onEditRule={(rule) => { setMobileRuleBookOpen(false); setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setMobileRuleBookOpen(false); setEditingRule(null); setRuleBuilderOpen(true); }} />
+                    <RuleBook rules={rules} onEditRule={(rule) => { setMobileRuleBookOpen(false); setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setMobileRuleBookOpen(false); setEditingRule(null); setDraftRule(null); setRuleBuilderOpen(true); }} />
                 </SheetContent>
             </Sheet>
 
-            <RuleBuilderModal open={ruleBuilderOpen} onOpenChange={setRuleBuilderOpen} onSaveRule={handleSaveRule} editingRule={editingRule} />
+            <RuleBuilderModal 
+                open={ruleBuilderOpen} 
+                onOpenChange={setRuleBuilderOpen} 
+                onSaveRule={handleSaveRule} 
+                editingRule={editingRule}
+                initialData={draftRule || undefined}
+                onStartSelection={handleStartSelection}
+            />
         </div>
     )
 }
