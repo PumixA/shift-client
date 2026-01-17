@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio, Trophy, RotateCcw, RefreshCw } from "lucide-react"
+import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio, Trophy, RotateCcw, RefreshCw, Plus } from "lucide-react"
 import { socket } from "@/services/socket"
 import { toast, Toaster } from "sonner"
 
@@ -9,11 +9,12 @@ import { toast, Toaster } from "sonner"
 import { TopBar } from "./game/top-bar"
 import { GameViewport, type GameViewportRef } from "./game/game-viewport"
 import { RuleBook } from "./game/rule-book"
-import { RuleBuilderModal, type BuiltRule } from "./game/rule-builder-modal"
+import { RuleBuilderModal } from "./game/rule-builder-modal"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Rule } from "@/src/types/rules"
 
 // --- Interfaces ---
 export interface Tile { id: string; x: number; y: number; type: "normal" | "special" | "start" | "end" }
@@ -53,10 +54,6 @@ const initialTiles: Tile[] = Array.from({ length: 20 }, (_, i) => ({
 }))
 
 const initialPlayers: Player[] = []
-
-const initialRules: BuiltRule[] = [
-    { id: "1", title: "Movement", trigger: { type: "roll_dice", value: "" }, conditions: [], actions: [{ type: "move_forward", value: "dice" }] },
-]
 
 // --- Victory Overlay Component ---
 const VictoryOverlay = ({ winner, onReset }: { winner: { id: string; name: string; color?: string }, onReset: () => void }) => {
@@ -107,7 +104,7 @@ export default function ShiftGame() {
     const [currentTurnId, setCurrentTurnId] = useState<string>("") // Renommé pour clarté
     const [diceValue, setDiceValue] = useState<number | null>(null)
     const [isRolling, setIsRolling] = useState(false)
-    const [rules, setRules] = useState<BuiltRule[]>(initialRules)
+    const [rules, setRules] = useState<Rule[]>([])
     const [winner, setWinner] = useState<{ id: string; name: string; color?: string } | null>(null)
     const [gameStatus, setGameStatus] = useState<'playing' | 'finished'>('playing')
 
@@ -118,7 +115,7 @@ export default function ShiftGame() {
 
     // --- UI State ---
     const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false)
-    const [editingRule, setEditingRule] = useState<BuiltRule | null>(null)
+    const [editingRule, setEditingRule] = useState<Rule | null>(null)
     const [mobileRuleBookOpen, setMobileRuleBookOpen] = useState(false)
     const viewportRef = useRef<GameViewportRef>(null)
 
@@ -386,7 +383,8 @@ export default function ShiftGame() {
         }
     }, [players, currentTurnId])
 
-    const handleSaveRule = (rule: BuiltRule) => {
+    const handleSaveRule = (rule: Rule) => {
+        console.log('✅ RULE GENERATED:', rule);
         setRules((prev) => {
             const existingIndex = prev.findIndex((r) => r.id === rule.id)
             if (existingIndex >= 0) {
@@ -451,7 +449,16 @@ export default function ShiftGame() {
                     )}
                 </div>
 
-                <TopBar currentTurnId={currentTurnId} players={players} diceValue={diceValue} isRolling={isRolling} onRollDice={rollDice} gameStatus={gameStatus} />
+                <div className="flex items-center gap-4">
+                    <Button 
+                        onClick={() => { setEditingRule(null); setRuleBuilderOpen(true); }}
+                        className="bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border border-cyan-400/50"
+                    >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Créer une règle
+                    </Button>
+                    <TopBar currentTurnId={currentTurnId} players={players} diceValue={diceValue} isRolling={isRolling} onRollDice={rollDice} gameStatus={gameStatus} />
+                </div>
             </header>
 
             <div className="flex-1 flex min-h-0 overflow-hidden relative">
@@ -459,6 +466,7 @@ export default function ShiftGame() {
                     <GameViewport ref={viewportRef} tiles={tiles} players={players} currentTurn={currentTurnId} onAddTile={addTile} onCenterCamera={centerOnPlayer} />
                 </div>
                 <aside className="hidden lg:flex lg:w-85 lg:shrink-0 border-l border-border/50 bg-background/60 backdrop-blur-md">
+                    {/* @ts-ignore */}
                     <RuleBook rules={rules} onEditRule={(rule) => { setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setEditingRule(null); setRuleBuilderOpen(true); }} />
                 </aside>
             </div>
@@ -474,6 +482,7 @@ export default function ShiftGame() {
                             <Book className="h-6 w-6 text-cyan-500" /> RULE BOOK
                         </SheetTitle>
                     </SheetHeader>
+                    {/* @ts-ignore */}
                     <RuleBook rules={rules} onEditRule={(rule) => { setMobileRuleBookOpen(false); setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setMobileRuleBookOpen(false); setEditingRule(null); setRuleBuilderOpen(true); }} />
                 </SheetContent>
             </Sheet>

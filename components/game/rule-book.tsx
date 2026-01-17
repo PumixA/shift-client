@@ -3,76 +3,45 @@ import { Book, Pencil, Trash2, Plus, Zap, HelpCircle, Play } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import type { BuiltRule } from "./rule-builder-modal"
+import { Rule, TriggerType, ActionType } from "@/src/types/rules"
 
 interface RuleBookProps {
-  rules: BuiltRule[]
-  onEditRule: (rule: BuiltRule) => void
+  rules: Rule[]
+  onEditRule: (rule: Rule) => void
   onDeleteRule: (id: string) => void
   onAddRule: () => void
 }
 
 // Helper to generate description from rule
-function generateDescription(rule: BuiltRule): string {
+function generateDescription(rule: Rule): string {
   const triggerLabels: Record<string, string> = {
-    land_on_tile: "Player lands on a tile",
-    roll_dice: "Player rolls the dice",
-    turn_start: "Turn starts",
-    turn_end: "Turn ends",
-    pass_tile: "Player passes a tile",
-  }
-
-  const tileLabels: Record<string, string> = {
-    any: "any tile",
-    normal: "normal tile",
-    special: "special tile",
-    start: "start tile",
-    end: "end tile",
-  }
-
-  const conditionLabels: Record<string, string> = {
-    player_score: "player score",
-    dice_value: "dice value",
-    tile_type: "tile type",
-    turn_number: "turn number",
-    player_position: "player position",
-  }
-
-  const operatorLabels: Record<string, string> = {
-    equals: "equals",
-    greater_than: "is greater than",
-    less_than: "is less than",
-    not_equals: "is not",
+    [TriggerType.ON_LAND]: "Player lands on a tile",
+    [TriggerType.ON_DICE_ROLL]: "Player rolls the dice",
+    [TriggerType.ON_TURN_START]: "Turn starts",
+    [TriggerType.ON_MOVE_START]: "Player starts moving",
+    [TriggerType.ON_PASS_OVER]: "Player passes over a tile",
   }
 
   const actionLabels: Record<string, string> = {
-    add_score: "add to score",
-    subtract_score: "subtract from score",
-    move_forward: "move forward",
-    move_backward: "move backward",
-    skip_turn: "skip next turn",
-    extra_turn: "grant extra turn",
-    add_tile: "add new tile",
+    [ActionType.MODIFY_SCORE]: "modify score",
+    [ActionType.MOVE_RELATIVE]: "move relative",
+    [ActionType.TELEPORT]: "teleport",
+    [ActionType.SKIP_TURN]: "skip next turn",
   }
 
   let desc = triggerLabels[rule.trigger.type] || rule.trigger.type
-  if (rule.trigger.type === "land_on_tile" || rule.trigger.type === "pass_tile") {
-    desc += ` (${tileLabels[rule.trigger.value] || rule.trigger.value})`
-  }
-
-  if (rule.conditions.length > 0) {
-    desc += ". If "
-    desc += rule.conditions
-      .map((c) => `${conditionLabels[c.type] || c.type} ${operatorLabels[c.operator] || c.operator} ${c.value}`)
-      .join(" and ")
+  if ((rule.trigger.type === TriggerType.ON_LAND || rule.trigger.type === TriggerType.ON_PASS_OVER) && rule.trigger.value !== undefined) {
+    desc += ` (Tile Index: ${rule.trigger.value})`
+  } else if (rule.trigger.type === TriggerType.ON_DICE_ROLL && rule.trigger.value !== undefined) {
+      desc += ` (Dice Value: ${rule.trigger.value})`
   }
 
   desc += ", then "
-  desc += rule.actions
+  desc += rule.effects
     .map((a) => {
       const label = actionLabels[a.type] || a.type
-      if (a.type === "skip_turn" || a.type === "extra_turn") return label
-      return `${label} ${a.value}`
+      if (a.type === ActionType.SKIP_TURN) return `${label} (${a.target})`
+      return `${label} ${a.value} (${a.target})`
     })
     .join(", ")
 
@@ -145,7 +114,7 @@ export function RuleBook({ rules, onEditRule, onDeleteRule, onAddRule }: RuleBoo
                     )}
                     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-400/10 text-green-400 border border-green-400/30">
                       <Play className="h-2.5 w-2.5" />
-                      THEN ({rule.actions.length})
+                      THEN ({rule.effects.length})
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground leading-relaxed">{generateDescription(rule)}</p>
