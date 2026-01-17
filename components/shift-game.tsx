@@ -204,7 +204,7 @@ export default function ShiftGame() {
             toast.success("État du jeu synchronisé !");
         }
 
-        function onDiceResult(data: { diceValue: number, players: ServerPlayer[], currentTurn: string, logs?: RuleLog[] }) {
+        function onDiceResult(data: { diceValue: number, players: ServerPlayer[], currentTurn: string, logs?: RuleLog[] | string[] }) {
             console.log("🎲 Résultat du dé reçu :", data);
             setIsRolling(true);
             let rolls = 0;
@@ -223,14 +223,20 @@ export default function ShiftGame() {
                     // Affichage des logs de règles
                     if (data.logs && data.logs.length > 0) {
                         setTimeout(() => {
-                            data.logs?.forEach((log, index) => {
-                                setTimeout(() => {
-                                    toast.info(log.message, {
-                                        icon: "⚡",
-                                        duration: 4000,
-                                        className: "border-l-4 border-yellow-500"
-                                    });
-                                }, index * 800); // Délai progressif entre chaque log
+                            data.logs?.forEach((log: any, index: number) => {
+                                const message = typeof log === 'string' ? log : log.message;
+                                
+                                // Filter logs to show only meaningful Rule events (containing ⚡)
+                                if (message.includes('⚡')) {
+                                    setTimeout(() => {
+                                        toast.info("Règle active !", {
+                                            description: message.replace('⚡', '').trim(),
+                                            icon: "⚡",
+                                            duration: 4000,
+                                            className: "border-l-4 border-yellow-500"
+                                        });
+                                    }, index * 800); // Délai progressif entre chaque log
+                                }
                             });
                         }, 500); // Petit délai après le mouvement
                     }
