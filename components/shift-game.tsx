@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef, useEffect } from "react"
-import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio, Trophy, RotateCcw, RefreshCw } from "lucide-react"
+import { Book, Wifi, WifiOff, Users, Hash, LogIn, Bell, Radio, Trophy, RotateCcw, RefreshCw, Plus, Crosshair } from "lucide-react"
 import { socket } from "@/services/socket"
 import { toast, Toaster } from "sonner"
 
@@ -9,11 +9,12 @@ import { toast, Toaster } from "sonner"
 import { TopBar } from "./game/top-bar"
 import { GameViewport, type GameViewportRef } from "./game/game-viewport"
 import { RuleBook } from "./game/rule-book"
-import { RuleBuilderModal, type BuiltRule } from "./game/rule-builder-modal"
+import { RuleBuilderModal } from "./game/rule-builder-modal"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Rule, TriggerType } from "@/src/types/rules"
 
 // --- Interfaces ---
 export interface Tile { id: string; x: number; y: number; type: "normal" | "special" | "start" | "end" }
@@ -39,6 +40,7 @@ interface ServerGameState {
     players: ServerPlayer[];
     currentTurn: string;
     status: 'playing' | 'finished';
+    activeRules?: Rule[]; // Added activeRules to sync
 }
 
 interface RuleLog {
@@ -53,10 +55,6 @@ const initialTiles: Tile[] = Array.from({ length: 20 }, (_, i) => ({
 }))
 
 const initialPlayers: Player[] = []
-
-const initialRules: BuiltRule[] = [
-    { id: "1", title: "Movement", trigger: { type: "roll_dice", value: "" }, conditions: [], actions: [{ type: "move_forward", value: "dice" }] },
-]
 
 // --- Victory Overlay Component ---
 const VictoryOverlay = ({ winner, onReset }: { winner: { id: string; name: string; color?: string }, onReset: () => void }) => {
@@ -107,7 +105,7 @@ export default function ShiftGame() {
     const [currentTurnId, setCurrentTurnId] = useState<string>("") // Renommé pour clarté
     const [diceValue, setDiceValue] = useState<number | null>(null)
     const [isRolling, setIsRolling] = useState(false)
-    const [rules, setRules] = useState<BuiltRule[]>(initialRules)
+    const [rules, setRules] = useState<Rule[]>([])
     const [winner, setWinner] = useState<{ id: string; name: string; color?: string } | null>(null)
     const [gameStatus, setGameStatus] = useState<'playing' | 'finished'>('playing')
 
@@ -118,9 +116,13 @@ export default function ShiftGame() {
 
     // --- UI State ---
     const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false)
-    const [editingRule, setEditingRule] = useState<BuiltRule | null>(null)
+    const [editingRule, setEditingRule] = useState<Rule | null>(null)
     const [mobileRuleBookOpen, setMobileRuleBookOpen] = useState(false)
     const viewportRef = useRef<GameViewportRef>(null)
+
+    // --- Interactive Targeting State ---
+    const [draftRule, setDraftRule] = useState<Partial<Rule> | null>(null)
+    const [isSelectingTile, setIsSelectingTile] = useState(false)
 
     // --- Helper: Map Server Index to Coordinates ---
     const getCoordinatesFromIndex = useCallback((index: number, currentTiles: Tile[]) => {
@@ -179,6 +181,11 @@ export default function ShiftGame() {
                 setCurrentTurnId(gameState.currentTurn);
             }
             setGameStatus(gameState.status);
+            
+            // Sync rules if available
+            if (gameState.activeRules) {
+                setRules(gameState.activeRules);
+            }
             
             // Correction UI : Si la partie est finie mais qu'on n'a pas reçu game_over (reconnexion)
             if (gameState.status === 'finished') {
@@ -275,6 +282,14 @@ export default function ShiftGame() {
             }
         }
 
+        function onRuleAdded(newRule: Rule) {
+            console.log('✨ Server confirmed rule:', newRule);
+            toast("Règle activée !", {
+                description: `"${newRule.title}" est maintenant en vigueur.`,
+                icon: <Book className="h-4 w-4 text-cyan-500" />,
+            });
+        }
+
         socket.on("connect", onConnect)
         socket.on("disconnect", onDisconnect)
         socket.on("room_joined", onRoomJoined)
@@ -286,6 +301,7 @@ export default function ShiftGame() {
         socket.on("player_joined_room", onPlayerJoined)
         socket.on("pong_response", onPongResponse)
         socket.on("incoming_shout", onIncomingShout)
+        socket.on("rule_added", onRuleAdded)
 
         return () => {
             socket.off("connect", onConnect)
@@ -299,6 +315,7 @@ export default function ShiftGame() {
             socket.off("player_joined_room", onPlayerJoined)
             socket.off("pong_response", onPongResponse)
             socket.off("incoming_shout", onIncomingShout)
+            socket.off("rule_added", onRuleAdded)
             socket.disconnect()
         }
     }, [mapServerPlayersToClient])
@@ -386,15 +403,43 @@ export default function ShiftGame() {
         }
     }, [players, currentTurnId])
 
-    const handleSaveRule = (rule: BuiltRule) => {
-        setRules((prev) => {
-            const existingIndex = prev.findIndex((r) => r.id === rule.id)
-            if (existingIndex >= 0) {
-                const updated = [...prev]; updated[existingIndex] = rule; return updated
-            }
-            return [...prev, rule]
-        })
+    const handleSaveRule = (rule: Rule) => {
+        if (!activeRoom) {
+            toast.error("Vous devez être dans une salle pour créer une règle !");
+            return;
+        }
+        console.log('📤 Sending rule to server:', rule);
+        socket.emit('create_rule', rule);
         setEditingRule(null)
+        setDraftRule(null) // Clear draft
+    }
+
+    // --- Interactive Targeting Handlers ---
+    const handleStartSelection = (currentData: Partial<Rule>) => {
+        setDraftRule(currentData)
+        setRuleBuilderOpen(false)
+        setIsSelectingTile(true)
+        toast.info("Cliquez sur une case du plateau pour la sélectionner", {
+            duration: 5000,
+            icon: <Crosshair className="h-4 w-4 text-yellow-400" />
+        })
+    }
+
+    const handleTileClick = (index: number) => {
+        if (!isSelectingTile) return
+
+        // Update draft rule with selected tile
+        const updatedDraft = {
+            ...draftRule,
+            trigger: {
+                type: TriggerType.ON_LAND,
+                value: index
+            }
+        }
+        setDraftRule(updatedDraft)
+        setIsSelectingTile(false)
+        setRuleBuilderOpen(true)
+        toast.success(`Case ${index} sélectionnée !`)
     }
 
     return (
@@ -451,15 +496,51 @@ export default function ShiftGame() {
                     )}
                 </div>
 
-                <TopBar currentTurnId={currentTurnId} players={players} diceValue={diceValue} isRolling={isRolling} onRollDice={rollDice} gameStatus={gameStatus} />
+                <div className="flex items-center gap-4">
+                    <Button 
+                        onClick={() => { setEditingRule(null); setDraftRule(null); setRuleBuilderOpen(true); }}
+                        className="bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border border-cyan-400/50"
+                    >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Créer une règle
+                    </Button>
+                    <TopBar currentTurnId={currentTurnId} players={players} diceValue={diceValue} isRolling={isRolling} onRollDice={rollDice} gameStatus={gameStatus} />
+                </div>
             </header>
 
             <div className="flex-1 flex min-h-0 overflow-hidden relative">
                 <div className="flex-1 min-w-0 relative">
-                    <GameViewport ref={viewportRef} tiles={tiles} players={players} currentTurn={currentTurnId} onAddTile={addTile} onCenterCamera={centerOnPlayer} />
+                    <GameViewport 
+                        ref={viewportRef} 
+                        tiles={tiles} 
+                        players={players} 
+                        currentTurn={currentTurnId} 
+                        onAddTile={addTile} 
+                        onCenterCamera={centerOnPlayer}
+                        isSelectionMode={isSelectingTile}
+                        onTileClick={handleTileClick}
+                    />
+                    
+                    {/* Selection Mode Overlay */}
+                    {isSelectingTile && (
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-6 py-3 rounded-full border border-yellow-400/50 shadow-[0_0_20px_rgba(250,204,21,0.3)] animate-pulse flex items-center gap-3 z-50">
+                            <Crosshair className="h-5 w-5 text-yellow-400 animate-spin-slow" />
+                            <span className="font-bold tracking-wide">MODE SÉLECTION : CLIQUEZ SUR UNE CASE</span>
+                            <Button 
+                                size="sm" 
+                                variant="ghost" 
+                                className="h-6 w-6 p-0 rounded-full hover:bg-white/20 ml-2"
+                                onClick={() => { setIsSelectingTile(false); setRuleBuilderOpen(true); }}
+                            >
+                                <span className="sr-only">Annuler</span>
+                                <div className="h-4 w-4 rotate-45 bg-white/50" />
+                            </Button>
+                        </div>
+                    )}
                 </div>
                 <aside className="hidden lg:flex lg:w-85 lg:shrink-0 border-l border-border/50 bg-background/60 backdrop-blur-md">
-                    <RuleBook rules={rules} onEditRule={(rule) => { setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setEditingRule(null); setRuleBuilderOpen(true); }} />
+                    {/* @ts-ignore */}
+                    <RuleBook rules={rules} onEditRule={(rule) => { setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setEditingRule(null); setDraftRule(null); setRuleBuilderOpen(true); }} />
                 </aside>
             </div>
 
@@ -474,11 +555,19 @@ export default function ShiftGame() {
                             <Book className="h-6 w-6 text-cyan-500" /> RULE BOOK
                         </SheetTitle>
                     </SheetHeader>
-                    <RuleBook rules={rules} onEditRule={(rule) => { setMobileRuleBookOpen(false); setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setMobileRuleBookOpen(false); setEditingRule(null); setRuleBuilderOpen(true); }} />
+                    {/* @ts-ignore */}
+                    <RuleBook rules={rules} onEditRule={(rule) => { setMobileRuleBookOpen(false); setEditingRule(rule); setRuleBuilderOpen(true); }} onDeleteRule={(id) => setRules(prev => prev.filter(r => r.id !== id))} onAddRule={() => { setMobileRuleBookOpen(false); setEditingRule(null); setDraftRule(null); setRuleBuilderOpen(true); }} />
                 </SheetContent>
             </Sheet>
 
-            <RuleBuilderModal open={ruleBuilderOpen} onOpenChange={setRuleBuilderOpen} onSaveRule={handleSaveRule} editingRule={editingRule} />
+            <RuleBuilderModal 
+                open={ruleBuilderOpen} 
+                onOpenChange={setRuleBuilderOpen} 
+                onSaveRule={handleSaveRule} 
+                editingRule={editingRule}
+                initialData={draftRule || undefined}
+                onStartSelection={handleStartSelection}
+            />
         </div>
     )
 }

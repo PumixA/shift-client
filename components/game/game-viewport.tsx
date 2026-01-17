@@ -16,6 +16,8 @@ interface GameViewportProps {
   currentTurn: number | string
   onAddTile: (direction: "up" | "down" | "left" | "right") => void
   onCenterCamera: () => void
+  isSelectionMode?: boolean
+  onTileClick?: (index: number) => void
 }
 
 const TILE_SIZE = 64
@@ -23,7 +25,7 @@ const TILE_GAP = 4
 const TOTAL_TILE_SIZE = TILE_SIZE + TILE_GAP
 
 export const GameViewport = forwardRef<GameViewportRef, GameViewportProps>(
-  ({ tiles, players, currentTurn, onAddTile, onCenterCamera }, ref) => {
+  ({ tiles, players, currentTurn, onAddTile, onCenterCamera, isSelectionMode, onTileClick }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null)
     const [pan, setPan] = useState({ x: 0, y: 0 })
     const [zoom, setZoom] = useState(1)
@@ -142,15 +144,15 @@ export const GameViewport = forwardRef<GameViewportRef, GameViewportProps>(
     }, [])
 
     return (
-      <div className="absolute inset-0 grid-pattern">
+      <div className={`absolute inset-0 grid-pattern ${isSelectionMode ? 'cursor-crosshair' : ''}`}>
         {/* Viewport - overflow hidden parent */}
         <div
           ref={containerRef}
-          className="absolute inset-0 cursor-grab active:cursor-grabbing overflow-hidden"
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
+          className={`absolute inset-0 overflow-hidden ${isSelectionMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
+          onMouseDown={!isSelectionMode ? handleMouseDown : undefined}
+          onMouseMove={!isSelectionMode ? handleMouseMove : undefined}
+          onMouseUp={!isSelectionMode ? handleMouseUp : undefined}
+          onMouseLeave={!isSelectionMode ? handleMouseUp : undefined}
           onWheel={handleWheel}
         >
           <div
@@ -163,9 +165,19 @@ export const GameViewport = forwardRef<GameViewportRef, GameViewportProps>(
             }}
           >
             {/* Grid tiles rendered at normalized world positions */}
-            {tiles.map((tile) => {
+            {tiles.map((tile, index) => {
               const worldPos = tileToWorld(tile.x, tile.y)
-              return <GameTile key={tile.id} tile={tile} x={worldPos.x} y={worldPos.y} />
+              return (
+                <GameTile 
+                  key={tile.id} 
+                  tile={tile} 
+                  x={worldPos.x} 
+                  y={worldPos.y} 
+                  index={index}
+                  isSelectionMode={isSelectionMode}
+                  onClick={() => onTileClick && onTileClick(index)}
+                />
+              )
             })}
 
             {players.map((player) => {
@@ -267,7 +279,7 @@ export const GameViewport = forwardRef<GameViewportRef, GameViewportProps>(
 
 GameViewport.displayName = "GameViewport"
 
-function GameTile({ tile, x, y }: { tile: Tile; x: number; y: number }) {
+function GameTile({ tile, x, y, index, isSelectionMode, onClick }: { tile: Tile; x: number; y: number; index: number; isSelectionMode?: boolean; onClick?: () => void }) {
   const getStyles = () => {
     switch (tile.type) {
       case "start":
@@ -296,7 +308,8 @@ function GameTile({ tile, x, y }: { tile: Tile; x: number; y: number }) {
 
   return (
     <div
-      className={`absolute w-16 h-16 rounded-lg border-2 flex items-center justify-center font-bold text-lg transition-all duration-300 ${getStyles()}`}
+      onClick={onClick}
+      className={`absolute w-16 h-16 rounded-lg border-2 flex items-center justify-center font-bold text-lg transition-all duration-300 ${getStyles()} ${isSelectionMode ? 'cursor-crosshair hover:ring-2 hover:ring-cyan-400 hover:scale-105 z-20' : ''}`}
       style={{
         left: x,
         top: y,
@@ -305,7 +318,7 @@ function GameTile({ tile, x, y }: { tile: Tile; x: number; y: number }) {
       {getLabel()}
       {/* Coordinate display for debugging */}
       <span className="absolute bottom-0.5 right-1 text-[8px] opacity-40 font-mono">
-        {tile.x},{tile.y}
+        {index}
       </span>
     </div>
   )
