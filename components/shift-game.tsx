@@ -40,6 +40,7 @@ interface ServerGameState {
     players: ServerPlayer[];
     currentTurn: string;
     status: 'playing' | 'finished';
+    activeRules?: Rule[]; // Added activeRules to sync
 }
 
 interface RuleLog {
@@ -177,6 +178,11 @@ export default function ShiftGame() {
             }
             setGameStatus(gameState.status);
             
+            // Sync rules if available
+            if (gameState.activeRules) {
+                setRules(gameState.activeRules);
+            }
+            
             // Correction UI : Si la partie est finie mais qu'on n'a pas reçu game_over (reconnexion)
             if (gameState.status === 'finished') {
                 // On cherche le gagnant (celui qui est à la position 19)
@@ -272,6 +278,14 @@ export default function ShiftGame() {
             }
         }
 
+        function onRuleAdded(newRule: Rule) {
+            console.log('✨ Server confirmed rule:', newRule);
+            toast("Règle activée !", {
+                description: `"${newRule.title}" est maintenant en vigueur.`,
+                icon: <Book className="h-4 w-4 text-cyan-500" />,
+            });
+        }
+
         socket.on("connect", onConnect)
         socket.on("disconnect", onDisconnect)
         socket.on("room_joined", onRoomJoined)
@@ -283,6 +297,7 @@ export default function ShiftGame() {
         socket.on("player_joined_room", onPlayerJoined)
         socket.on("pong_response", onPongResponse)
         socket.on("incoming_shout", onIncomingShout)
+        socket.on("rule_added", onRuleAdded)
 
         return () => {
             socket.off("connect", onConnect)
@@ -296,6 +311,7 @@ export default function ShiftGame() {
             socket.off("player_joined_room", onPlayerJoined)
             socket.off("pong_response", onPongResponse)
             socket.off("incoming_shout", onIncomingShout)
+            socket.off("rule_added", onRuleAdded)
             socket.disconnect()
         }
     }, [mapServerPlayersToClient])
@@ -384,14 +400,12 @@ export default function ShiftGame() {
     }, [players, currentTurnId])
 
     const handleSaveRule = (rule: Rule) => {
-        console.log('✅ RULE GENERATED:', rule);
-        setRules((prev) => {
-            const existingIndex = prev.findIndex((r) => r.id === rule.id)
-            if (existingIndex >= 0) {
-                const updated = [...prev]; updated[existingIndex] = rule; return updated
-            }
-            return [...prev, rule]
-        })
+        if (!activeRoom) {
+            toast.error("Vous devez être dans une salle pour créer une règle !");
+            return;
+        }
+        console.log('📤 Sending rule to server:', rule);
+        socket.emit('create_rule', rule);
         setEditingRule(null)
     }
 
